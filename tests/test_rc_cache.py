@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib
 from unittest.mock import patch
 
+import pytest
+
 from researchclaw.literature.models import Author, Paper
 from researchclaw.literature.search import search_papers
 
@@ -97,6 +99,35 @@ class TestStats:
 
 
 class TestSearchDegradation:
+    @pytest.mark.parametrize(
+        "year_min, expected_ids",
+        [
+            (0, ["new", "boundary", "old", "unknown"]),
+            (-1, ["new", "boundary", "old", "unknown"]),
+            (2024, ["new", "boundary"]),
+            (2026, []),
+        ],
+    )
+    def test_cache_fallback_respects_year_min(self, tmp_path, year_min, expected_ids):
+        cached_papers = [
+            {"paper_id": "unknown", "title": "Unknown year"},
+            {"paper_id": "old", "title": "Old paper", "year": 2018},
+            {"paper_id": "boundary", "title": "Boundary paper", "year": 2024},
+            {"paper_id": "new", "title": "New paper", "year": 2025},
+        ]
+        put_cache("test query", "semantic_scholar", 20, cached_papers, cache_base=tmp_path)
+
+        with patch("researchclaw.literature.cache._DEFAULT_CACHE_DIR", tmp_path):
+            with patch(
+                "researchclaw.literature.search.search_semantic_scholar",
+                side_effect=RuntimeError("API down"),
+            ):
+                results = search_papers(
+                    "test query", sources=["semantic_scholar"], year_min=year_min
+                )
+
+        assert [paper.paper_id for paper in results] == expected_ids
+
     def test_search_uses_cache_on_failure(self, tmp_path):
         cached_papers = [
             {

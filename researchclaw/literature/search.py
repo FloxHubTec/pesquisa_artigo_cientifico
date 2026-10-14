@@ -212,6 +212,7 @@ def search_papers(
             cached = cache_get(query, cache_source, limit)
             if cached:
                 papers = _dicts_to_papers(cached)
+                papers = [p for p in papers if year_min <= 0 or p.year >= year_min]
                 all_papers.extend(papers)
                 cache_hits += len(papers)
                 logger.info(
