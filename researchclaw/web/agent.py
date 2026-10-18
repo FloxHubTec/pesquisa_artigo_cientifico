@@ -26,7 +26,7 @@ from typing import Any
 from researchclaw.web.crawler import CrawlResult, WebCrawler
 from researchclaw.web.pdf_extractor import PDFContent, PDFExtractor
 from researchclaw.web.scholar import GoogleScholarClient, ScholarPaper
-from researchclaw.web.search import SearchResult, WebSearchClient, WebSearchResponse
+from researchclaw.web.search import SearchResult, SearchTaskContext, WebSearchClient, WebSearchResponse
 
 logger = logging.getLogger(__name__)
 
@@ -215,8 +215,10 @@ class WebSearchAgent:
         if search_queries is None:
             search_queries = self._generate_queries(topic)
 
-        # 2. Web search (Tavily / DuckDuckGo)
-        self._run_web_search(result, search_queries)
+        # Each invocation owns its correlation identity, even on a reused agent.
+        task_context = SearchTaskContext()
+        # 2. Web search (Tavily / DuckDuckGo / Parallel)
+        self._run_web_search(result, search_queries, task_context=task_context)
 
         # 3. Google Scholar search
         if self.enable_scholar and self.scholar_client and self.scholar_client.available:
@@ -250,12 +252,13 @@ class WebSearchAgent:
     # ------------------------------------------------------------------
 
     def _run_web_search(
-        self, result: WebSearchAgentResult, queries: list[str]
+        self, result: WebSearchAgentResult, queries: list[str],
+        *, task_context: SearchTaskContext | None = None,
     ) -> None:
         """Run web search across all queries."""
         try:
             responses = self.web_client.search_multi(
-                queries, max_results=self.max_web_results
+                queries, max_results=self.max_web_results, task_context=task_context,
             )
             for resp in responses:
                 result.web_results.extend(resp.results)

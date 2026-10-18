@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from researchclaw import __version__
-from researchclaw.web.search import SearchResult
+from researchclaw.web.search import SearchResult, SearchTaskContext
 
 MCP_URL = "https://search.parallel.ai/mcp"
 USER_AGENT = f"AutoResearchClaw/{__version__} (+https://github.com/aiming-lab/AutoResearchClaw)"
@@ -18,7 +18,8 @@ USER_AGENT = f"AutoResearchClaw/{__version__} (+https://github.com/aiming-lab/Au
 class ParallelSearchClient:
     """Use the optional MCP SDK's Streamable HTTP transport without credentials.
 
-    One stable search session id is shared by all queries from this client.
+    Direct calls share one stable search session id per client by default.
+    An explicit task context overrides it without mutating the cached client.
     The blocking portal also supports callers already running an asyncio loop.
     """
 
@@ -30,6 +31,7 @@ class ParallelSearchClient:
         self, query: str, *, limit: int,
         include_domains: list[str] | None = None,
         exclude_domains: list[str] | None = None,
+        task_context: SearchTaskContext | None = None,
     ) -> list[SearchResult]:
         if limit <= 0:
             raise ValueError("Parallel result limit must be positive")
@@ -40,7 +42,7 @@ class ParallelSearchClient:
             raise ImportError('Parallel search requires: pip install "researchclaw[parallel]"') from exc
 
         with start_blocking_portal() as portal:
-            payload = portal.call(self._search, query)
+            payload = portal.call(self._search, query, task_context)
 
         results = []
         for row in payload.get("results", []):
@@ -71,7 +73,9 @@ class ParallelSearchClient:
                 break
         return results
 
-    async def _search(self, query: str) -> dict[str, Any]:
+    async def _search(
+        self, query: str, task_context: SearchTaskContext | None = None,
+    ) -> dict[str, Any]:
         import anyio
         from mcp import ClientSession, types
         from mcp.client.streamable_http import streamablehttp_client
@@ -90,7 +94,7 @@ class ParallelSearchClient:
                     response = await session.call_tool("web_search", {
                         "objective": query,
                         "search_queries": [query],
-                        "session_id": self.session_id,
+                        "session_id": task_context.session_id if task_context is not None else self.session_id,
                     })
 
         if response.isError:

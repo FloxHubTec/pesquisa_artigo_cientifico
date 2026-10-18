@@ -777,6 +777,12 @@ otherwise. Select `tavily` or `duckduckgo` to pin either provider, or set
 `WebSearchClient(provider="parallel")`. Parallel applies `max_results` and domain
 filters locally to the returned results; it does not supply Tavily's AI answer.
 `search_timeout_sec` bounds each Parallel query including MCP setup.
+Each `WebSearchAgent.search_and_extract` invocation shares one Parallel correlation
+ID across its queries and uses a new ID for the next invocation, including when
+reusing an agent. Direct `WebSearchClient` and `ParallelSearchClient` calls retain
+one ID per client by default. To group related direct calls explicitly, pass the
+same `SearchTaskContext` from `researchclaw.web.search` as `task_context` to
+`search` or `search_multi`; use a fresh context for an independent operation.
 
 MiniMax presets use `MINIMAX_API_KEY`, `MiniMax-M3` as the primary model,
 and `MiniMax-M2.7` in the fallback chain.

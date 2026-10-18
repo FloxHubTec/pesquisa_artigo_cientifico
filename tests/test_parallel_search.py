@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock
 
 import pytest
@@ -18,7 +20,7 @@ from researchclaw.config import RCConfig
 from researchclaw.pipeline.stage_impls._literature import _execute_literature_collect
 from researchclaw.web.agent import WebSearchAgent
 from researchclaw.web.parallel import MCP_URL, USER_AGENT, ParallelSearchClient
-from researchclaw.web.search import WebSearchClient, WebSearchResponse
+from researchclaw.web.search import SearchTaskContext, WebSearchClient, WebSearchResponse
 
 
 @pytest.fixture(autouse=True)
@@ -66,6 +68,8 @@ def mcp_http(monkeypatch):
             args = body["params"]["arguments"]
             assert args["objective"] == args["search_queries"][0]
             assert len(args["session_id"]) == 32
+            if state.get("on_call"):
+                await state["on_call"](args)
             if state["delay"]:
                 await anyio.sleep(state["delay"])
             payload = state["payload"]
@@ -95,21 +99,126 @@ def tool_calls(state):
     return [b for b in bodies if b["method"] == "tools/call"]
 
 
-def test_agent_consumes_mcp_search_and_retains_one_session(mcp_http):
+def test_reusable_agent_scopes_each_topic_at_mcp_boundary(mcp_http):
     agent = WebSearchAgent(search_provider="parallel", enable_scholar=False,
                            enable_crawling=False, enable_pdf=False)
-    result = agent.search_and_extract("research", search_queries=["research evidence"])
-    context = result.to_context_string()
-    assert "https://papers.example.org/article" in context
-    assert "A useful research excerpt" in context
-    assert result.web_results[0].content.endswith("Further evidence")
-    assert result.web_results[0].source == "parallel"
-    assert "file:" not in context
-    agent.web_client.search("another query")
+    results = [agent.search_and_extract(topic, search_queries=[f"{topic} evidence", f"{topic} survey"])
+               for topic in ("vision", "language")]
+    for topic, result in zip(("vision", "language"), results):
+        assert result.topic == topic
+        context = result.to_context_string()
+        assert "https://papers.example.org/article" in context
+        assert "A useful research excerpt" in context
+        assert result.web_results[0].content.endswith("Further evidence")
+        assert result.web_results[0].source == "parallel"
+        assert "file:" not in context
+        assert len(result.web_results) == 2  # Cross-query URL deduplication still applies.
     calls = tool_calls(mcp_http)
-    assert calls[0]["params"]["arguments"]["session_id"] == calls[1]["params"]["arguments"]["session_id"]
+    args = [c["params"]["arguments"] for c in calls]
+    assert [a["search_queries"][0] for a in args] == [
+        "vision evidence", "vision survey", "language evidence", "language survey"]
+    assert args[0]["session_id"] == args[1]["session_id"]
+    assert args[2]["session_id"] == args[3]["session_id"]
+    assert args[0]["session_id"] != args[2]["session_id"]
     assert any(json.loads(r.content)["method"] == "tools/list"
                for r in mcp_http["requests"] if r.method == "POST")
+
+
+def test_reusable_agent_interleaved_topics_keep_local_context(mcp_http):
+    agent = WebSearchAgent(search_provider="parallel", enable_scholar=False,
+                           enable_crawling=False, enable_pdf=False)
+    a_first, b_first, a_second = (threading.Event() for _ in range(3))
+
+    async def interleave(args):
+        query = args["search_queries"][0]
+        if query == "a1":
+            a_first.set()
+            assert await anyio.to_thread.run_sync(b_first.wait, 10)
+        elif query == "b1":
+            b_first.set()
+            assert await anyio.to_thread.run_sync(a_second.wait, 10)
+        elif query == "a2":
+            a_second.set()
+
+    mcp_http["on_call"] = interleave
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(agent.search_and_extract, "a", search_queries=["a1", "a2"])
+        try:
+            assert a_first.wait(10)
+            second = pool.submit(agent.search_and_extract, "b", search_queries=["b1", "b2"])
+            for future in (first, second):
+                result = future.result(timeout=20)
+                assert "A useful research excerpt" in result.to_context_string()
+        finally:
+            b_first.set()
+            a_second.set()
+    args = [c["params"]["arguments"] for c in tool_calls(mcp_http)]
+    assert [a["search_queries"][0] for a in args] == ["a1", "b1", "a2", "b2"]
+    ids = {a["search_queries"][0]: a["session_id"] for a in args}
+    assert ids["a1"] == ids["a2"]
+    assert ids["b1"] == ids["b2"]
+    assert ids["a1"] != ids["b1"]
+    assert all(client.is_closed for client in mcp_http["clients"])
+
+
+@pytest.mark.parametrize("failure", ["error", "timeout", "cancel"])
+def test_reusable_agent_new_context_after_failed_invocation(mcp_http, monkeypatch, failure):
+    agent = WebSearchAgent(search_provider="parallel", search_timeout_sec=0.1 if failure == "timeout" else 5,
+                           enable_scholar=False, enable_crawling=False, enable_pdf=False)
+    mcp_http["error"] = failure == "error"
+    mcp_http["delay"] = 10 if failure in {"timeout", "cancel"} else 0
+    if failure == "cancel":
+        original = ParallelSearchClient._search
+
+        async def cancel_first(self, query, *args, **kwargs):
+            if query == "failed1":
+                with anyio.move_on_after(0.1) as scope:
+                    await original(self, query, *args, **kwargs)
+                assert scope.cancel_called
+                raise asyncio.CancelledError
+            return await original(self, query, *args, **kwargs)
+
+        monkeypatch.setattr(ParallelSearchClient, "_search", cancel_first)
+    failed = agent.search_and_extract("failed", search_queries=["failed1", "failed2"])
+    assert not failed.web_results
+    mcp_http["error"] = False
+    mcp_http["delay"] = 0
+    result = agent.search_and_extract("new", search_queries=["new1", "new2"])
+    assert "https://papers.example.org/article" in result.to_context_string()
+    assert "A useful research excerpt" in result.to_context_string()
+    args = [c["params"]["arguments"] for c in tool_calls(mcp_http)]
+    assert [a["search_queries"][0] for a in args] == ["failed1", "new1", "new2"]
+    assert args[0]["session_id"] != args[1]["session_id"]
+    assert args[1]["session_id"] == args[2]["session_id"]
+    assert all(client.is_closed for client in mcp_http["clients"])
+
+
+def test_direct_web_client_preserves_default_and_explicit_batch_context(mcp_http):
+    client = WebSearchClient(provider="parallel")
+    client.search("default1")
+    context = SearchTaskContext()
+    batch = client.search_multi(["batch1", "batch2"], inter_query_delay=0, task_context=context)
+    assert len(batch[0].results) == 2
+    assert not batch[1].results  # Existing cross-query deduplication.
+    client.search("batch3", task_context=context)
+    client.search("independent", task_context=SearchTaskContext())
+    client.search("default2")
+    ids = [c["params"]["arguments"]["session_id"] for c in tool_calls(mcp_http)]
+    assert ids[0] == ids[5]
+    assert ids[1:4] == [context.session_id] * 3
+    assert len({ids[0], ids[1], ids[4]}) == 3
+
+
+def test_direct_parallel_client_context_does_not_reset_default(mcp_http):
+    client = ParallelSearchClient()
+    context = SearchTaskContext()
+    for query, task in [("default1", None), ("batch1", context),
+                        ("batch2", context), ("default2", None)]:
+        assert client.search(query, limit=1, task_context=task)[0].content.endswith("Further evidence")
+    ids = [c["params"]["arguments"]["session_id"] for c in tool_calls(mcp_http)]
+    assert ids[0] == ids[3] == client.session_id
+    assert ids[1] == ids[2] == context.session_id
+    assert ids[0] != ids[1]
 
 
 def test_text_content_domains_and_limit(mcp_http):

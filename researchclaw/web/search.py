@@ -20,8 +20,20 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.request import Request, urlopen
 from urllib.parse import quote_plus
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SearchTaskContext:
+    """Correlation identity shared by the queries in one search operation.
+
+    Pass the same context across related searches. Parallel uses this identity
+    as its MCP ``session_id``; other providers ignore it.
+    """
+
+    session_id: str = field(default_factory=lambda: uuid4().hex)
 
 
 @dataclass
@@ -113,8 +125,13 @@ class WebSearchClient:
         max_results: int | None = None,
         include_domains: list[str] | None = None,
         exclude_domains: list[str] | None = None,
+        task_context: SearchTaskContext | None = None,
     ) -> WebSearchResponse:
-        """Search the web for a query."""
+        """Search the web for a query.
+
+        Without a context, direct Parallel calls retain one ID per client.
+        Supply a fresh context to start an independent operation on this client.
+        """
         limit = max_results or self.max_results
         t0 = time.monotonic()
 
@@ -126,6 +143,7 @@ class WebSearchClient:
             results = self._parallel_client.search(
                 query, limit=limit,
                 include_domains=include_domains, exclude_domains=exclude_domains,
+                task_context=task_context,
             )
             return WebSearchResponse(
                 query=query, results=results, source="parallel",
@@ -154,15 +172,20 @@ class WebSearchClient:
         *,
         max_results: int | None = None,
         inter_query_delay: float = 1.0,
+        task_context: SearchTaskContext | None = None,
     ) -> list[WebSearchResponse]:
-        """Run multiple search queries with cross-query deduplication."""
+        """Run multiple queries with deduplication and a shared task context.
+
+        Omitting the context preserves the direct client's stable Parallel ID.
+        """
         responses = []
         seen_urls: set[str] = set()
 
         for i, query in enumerate(queries):
             if i > 0:
                 time.sleep(inter_query_delay)
-            resp = self.search(query, max_results=max_results)
+            context_kwargs = {"task_context": task_context} if task_context is not None else {}
+            resp = self.search(query, max_results=max_results, **context_kwargs)
             unique_results = [r for r in resp.results if r.url not in seen_urls]
             seen_urls.update(r.url for r in unique_results)
             resp.results = unique_results
