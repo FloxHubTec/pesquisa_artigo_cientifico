@@ -27,9 +27,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class SearchTaskContext:
-    """Correlation identity shared by the queries in one search operation.
+    """Caller-owned immutable identity for one conversation or research run.
 
-    Pass the same context across related searches. Parallel uses this identity
+    Reuse across batches, follow-ups, retries and cancellations of the same run.
+    Create a fresh context for independent or reset research. Parallel uses this identity
     as its MCP ``session_id``; other providers ignore it.
     """
 
@@ -129,8 +130,8 @@ class WebSearchClient:
     ) -> WebSearchResponse:
         """Search the web for a query.
 
-        Without a context, direct Parallel calls retain one ID per client.
-        Supply a fresh context to start an independent operation on this client.
+        Pass a caller-owned context for related calls in one research run.
+        Without a context, Parallel omits the optional session identity.
         """
         limit = max_results or self.max_results
         t0 = time.monotonic()
@@ -176,7 +177,7 @@ class WebSearchClient:
     ) -> list[WebSearchResponse]:
         """Run multiple queries with deduplication and a shared task context.
 
-        Omitting the context preserves the direct client's stable Parallel ID.
+        Without a caller-owned context, Parallel omits the optional session identity.
         """
         responses = []
         seen_urls: set[str] = set()

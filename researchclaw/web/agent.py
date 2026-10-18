@@ -194,6 +194,7 @@ class WebSearchAgent:
         search_queries: list[str] | None = None,
         crawl_urls: list[str] | None = None,
         pdf_urls: list[str] | None = None,
+        task_context: SearchTaskContext | None = None,
     ) -> WebSearchAgentResult:
         """Run the full search + extraction pipeline.
 
@@ -207,6 +208,10 @@ class WebSearchAgent:
             Specific URLs to crawl. If None, crawls top search result URLs.
         pdf_urls:
             Specific PDF URLs to extract. If None, extracts PDFs from search.
+        task_context:
+            Caller-owned identity for one conversation/research run. Reuse for
+            follow-ups and retries, including after cancellation. If omitted,
+            this invocation starts independent research with a fresh context.
         """
         t0 = time.monotonic()
         result = WebSearchAgentResult(topic=topic)
@@ -215,8 +220,9 @@ class WebSearchAgent:
         if search_queries is None:
             search_queries = self._generate_queries(topic)
 
-        # Each invocation owns its correlation identity, even on a reused agent.
-        task_context = SearchTaskContext()
+        # Keep identity local; never reset or overwrite a reusable client.
+        if task_context is None:
+            task_context = SearchTaskContext()
         # 2. Web search (Tavily / DuckDuckGo / Parallel)
         self._run_web_search(result, search_queries, task_context=task_context)
 

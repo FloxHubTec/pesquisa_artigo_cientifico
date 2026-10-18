@@ -659,14 +659,24 @@ def execute_stage(
                 for stage_key, path_or_text in getattr(config.prompts, "extra_prompts", ())  # type: ignore[attr-defined]
             } or None,
         )
+        search_kwargs = {}
+        if (stage == Stage.LITERATURE_COLLECT and config.web_search.enabled
+                and config.web_search.provider == "parallel"):
+            from uuid import NAMESPACE_URL, uuid5
+            from researchclaw.web.search import SearchTaskContext
+
+            # The pipeline owns run_id across retries/resumes, unlike a client.
+            search_kwargs["task_context"] = SearchTaskContext(
+                session_id=uuid5(NAMESPACE_URL, f"AutoResearchClaw:research:{run_id}").hex,
+            )
         try:
             result = executor(
-                stage_dir, run_dir, config, adapters, llm=llm, prompts=prompts
+                stage_dir, run_dir, config, adapters, llm=llm, prompts=prompts, **search_kwargs
             )
         except TypeError as exc:
             if "unexpected keyword argument 'prompts'" not in str(exc):
                 raise
-            result = executor(stage_dir, run_dir, config, adapters, llm=llm)
+            result = executor(stage_dir, run_dir, config, adapters, llm=llm, **search_kwargs)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Stage %s failed", stage.name)
         result = StageResult(

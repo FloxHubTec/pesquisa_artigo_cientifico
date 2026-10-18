@@ -17,7 +17,6 @@ import mcp.client.streamable_http as transport
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
-from researchclaw.pipeline.stage_impls._literature import _execute_literature_collect
 from researchclaw.web.agent import WebSearchAgent
 from researchclaw.web.parallel import MCP_URL, USER_AGENT, ParallelSearchClient
 from researchclaw.web.search import SearchTaskContext, WebSearchClient, WebSearchResponse
@@ -67,7 +66,8 @@ def mcp_http(monkeypatch):
             assert body["params"]["name"] == "web_search"
             args = body["params"]["arguments"]
             assert args["objective"] == args["search_queries"][0]
-            assert len(args["session_id"]) == 32
+            if "session_id" in args:
+                assert len(args["session_id"]) == 32
             if state.get("on_call"):
                 await state["on_call"](args)
             if state["delay"]:
@@ -124,7 +124,8 @@ def test_reusable_agent_scopes_each_topic_at_mcp_boundary(mcp_http):
                for r in mcp_http["requests"] if r.method == "POST")
 
 
-def test_reusable_agent_interleaved_topics_keep_local_context(mcp_http):
+@pytest.mark.parametrize("caller_owned", [False, True])
+def test_reusable_agent_interleaved_topics_keep_local_context(mcp_http, caller_owned):
     agent = WebSearchAgent(search_provider="parallel", enable_scholar=False,
                            enable_crawling=False, enable_pdf=False)
     a_first, b_first, a_second = (threading.Event() for _ in range(3))
@@ -142,10 +143,12 @@ def test_reusable_agent_interleaved_topics_keep_local_context(mcp_http):
 
     mcp_http["on_call"] = interleave
     with ThreadPoolExecutor(max_workers=2) as pool:
-        first = pool.submit(agent.search_and_extract, "a", search_queries=["a1", "a2"])
+        context_a = {"task_context": SearchTaskContext()} if caller_owned else {}
+        context_b = {"task_context": SearchTaskContext()} if caller_owned else {}
+        first = pool.submit(agent.search_and_extract, "a", search_queries=["a1", "a2"], **context_a)
         try:
             assert a_first.wait(10)
-            second = pool.submit(agent.search_and_extract, "b", search_queries=["b1", "b2"])
+            second = pool.submit(agent.search_and_extract, "b", search_queries=["b1", "b2"], **context_b)
             for future in (first, second):
                 result = future.result(timeout=20)
                 assert "A useful research excerpt" in result.to_context_string()
@@ -162,7 +165,8 @@ def test_reusable_agent_interleaved_topics_keep_local_context(mcp_http):
 
 
 @pytest.mark.parametrize("failure", ["error", "timeout", "cancel"])
-def test_reusable_agent_new_context_after_failed_invocation(mcp_http, monkeypatch, failure):
+@pytest.mark.parametrize("same_run", [False, True])
+def test_reusable_agent_context_after_failed_invocation(mcp_http, monkeypatch, failure, same_run):
     agent = WebSearchAgent(search_provider="parallel", search_timeout_sec=0.1 if failure == "timeout" else 5,
                            enable_scholar=False, enable_crawling=False, enable_pdf=False)
     mcp_http["error"] = failure == "error"
@@ -179,21 +183,22 @@ def test_reusable_agent_new_context_after_failed_invocation(mcp_http, monkeypatc
             return await original(self, query, *args, **kwargs)
 
         monkeypatch.setattr(ParallelSearchClient, "_search", cancel_first)
-    failed = agent.search_and_extract("failed", search_queries=["failed1", "failed2"])
+    context_kwargs = {"task_context": SearchTaskContext()} if same_run else {}
+    failed = agent.search_and_extract("failed", search_queries=["failed1", "failed2"], **context_kwargs)
     assert not failed.web_results
     mcp_http["error"] = False
     mcp_http["delay"] = 0
-    result = agent.search_and_extract("new", search_queries=["new1", "new2"])
+    result = agent.search_and_extract("new", search_queries=["new1", "new2"], **context_kwargs)
     assert "https://papers.example.org/article" in result.to_context_string()
     assert "A useful research excerpt" in result.to_context_string()
     args = [c["params"]["arguments"] for c in tool_calls(mcp_http)]
     assert [a["search_queries"][0] for a in args] == ["failed1", "new1", "new2"]
-    assert args[0]["session_id"] != args[1]["session_id"]
+    assert (args[0]["session_id"] == args[1]["session_id"]) is same_run
     assert args[1]["session_id"] == args[2]["session_id"]
     assert all(client.is_closed for client in mcp_http["clients"])
 
 
-def test_direct_web_client_preserves_default_and_explicit_batch_context(mcp_http):
+def test_direct_web_client_omits_unowned_identity_and_reuses_batch_context(mcp_http):
     client = WebSearchClient(provider="parallel")
     client.search("default1")
     context = SearchTaskContext()
@@ -203,23 +208,43 @@ def test_direct_web_client_preserves_default_and_explicit_batch_context(mcp_http
     client.search("batch3", task_context=context)
     client.search("independent", task_context=SearchTaskContext())
     client.search("default2")
-    ids = [c["params"]["arguments"]["session_id"] for c in tool_calls(mcp_http)]
-    assert ids[0] == ids[5]
-    assert ids[1:4] == [context.session_id] * 3
-    assert len({ids[0], ids[1], ids[4]}) == 3
+    args = [c["params"]["arguments"] for c in tool_calls(mcp_http)]
+    assert "session_id" not in args[0] and "session_id" not in args[5]
+    assert [a["session_id"] for a in args[1:4]] == [context.session_id] * 3
+    assert args[4]["session_id"] != context.session_id
+    client.search_multi(["unowned1", "unowned2"], inter_query_delay=0)
+    assert all("session_id" not in c["params"]["arguments"] for c in tool_calls(mcp_http)[6:])
 
 
-def test_direct_parallel_client_context_does_not_reset_default(mcp_http):
+def test_direct_parallel_client_omits_unowned_identity(mcp_http):
     client = ParallelSearchClient()
     context = SearchTaskContext()
     for query, task in [("default1", None), ("batch1", context),
                         ("batch2", context), ("default2", None)]:
         assert client.search(query, limit=1, task_context=task)[0].content.endswith("Further evidence")
-    ids = [c["params"]["arguments"]["session_id"] for c in tool_calls(mcp_http)]
-    assert ids[0] == ids[3] == client.session_id
-    assert ids[1] == ids[2] == context.session_id
-    assert ids[0] != ids[1]
+    args = [c["params"]["arguments"] for c in tool_calls(mcp_http)]
+    assert "session_id" not in args[0] and "session_id" not in args[3]
+    assert args[1]["session_id"] == args[2]["session_id"] == context.session_id
 
+
+
+def test_public_agent_same_run_followups_and_retries_reuse_context(mcp_http):
+    from dataclasses import FrozenInstanceError
+
+    agent = WebSearchAgent(search_provider="parallel", enable_scholar=False,
+                           enable_crawling=False, enable_pdf=False)
+    context = SearchTaskContext()
+    for queries in (["initial1", "initial2"], ["followup"], ["followup"]):
+        result = agent.search_and_extract("same research", search_queries=queries,
+                                          task_context=context)
+        assert "A useful research excerpt" in result.to_context_string()
+    args = [c["params"]["arguments"] for c in tool_calls(mcp_http)]
+    assert [a["session_id"] for a in args] == [context.session_id] * 4
+    with pytest.raises(FrozenInstanceError):
+        context.session_id = "changed"
+    agent.search_and_extract("same research", search_queries=["reset"],
+                             task_context=SearchTaskContext())
+    assert tool_calls(mcp_http)[-1]["params"]["arguments"]["session_id"] != context.session_id
 
 def test_text_content_domains_and_limit(mcp_http):
     mcp_http["text_only"] = True
@@ -331,7 +356,19 @@ def test_stage4_config_to_context_without_other_network(enabled, mcp_http, monke
     (prior / "queries.json").write_text(json.dumps({"queries": ["research evidence"]}))
     stage_dir = run_dir / "stage-04"
     stage_dir.mkdir()
-    _execute_literature_collect(stage_dir, run_dir, config, AdapterBundle(), llm=None)
+    from researchclaw.pipeline.executor import execute_stage
+    from researchclaw.pipeline.stages import Stage, StageStatus
+    (prior / "search_plan.yaml").write_text("queries: [research evidence]\n")
+    identities = []
+    for run_id in ("run-a", "run-a", "run-b"):
+        result = execute_stage(Stage.LITERATURE_COLLECT, run_dir=run_dir, run_id=run_id,
+                               config=config, adapters=AdapterBundle())
+        assert result.status == StageStatus.DONE
+        if enabled:
+            identities.append(tool_calls(mcp_http)[-1]["params"]["arguments"]["session_id"])
+    if enabled:
+        assert identities[0] == identities[1]
+        assert identities[0] != identities[2]
     context = stage_dir / "web_context.md"
     if enabled:
         assert "A useful research excerpt" in context.read_text()

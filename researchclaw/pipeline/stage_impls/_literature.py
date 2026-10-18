@@ -7,7 +7,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -30,6 +30,8 @@ from researchclaw.pipeline._helpers import (
 )
 from researchclaw.pipeline.stages import Stage, StageStatus
 from researchclaw.prompts import PromptManager
+if TYPE_CHECKING:
+    from researchclaw.web.search import SearchTaskContext
 
 logger = logging.getLogger(__name__)
 
@@ -387,6 +389,7 @@ def _execute_literature_collect(
     *,
     llm: LLMClient | None = None,
     prompts: PromptManager | None = None,
+    task_context: SearchTaskContext | None = None,
 ) -> StageResult:
     """Stage 4: Collect literature — prefer real APIs, fallback to LLM."""
     topic = config.research.topic
@@ -522,7 +525,7 @@ def _execute_literature_collect(
                 max_crawl_urls=config.web_search.max_crawl_urls,
             )
             web_result = web_agent.search_and_extract(
-                topic, search_queries=queries,
+                topic, search_queries=queries, task_context=task_context,
             )
 
             # Convert Google Scholar papers into candidates

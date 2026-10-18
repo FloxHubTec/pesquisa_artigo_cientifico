@@ -6,7 +6,6 @@ import json
 from datetime import timedelta
 from typing import Any
 from urllib.parse import urlsplit
-from uuid import uuid4
 
 from researchclaw import __version__
 from researchclaw.web.search import SearchResult, SearchTaskContext
@@ -18,14 +17,13 @@ USER_AGENT = f"AutoResearchClaw/{__version__} (+https://github.com/aiming-lab/Au
 class ParallelSearchClient:
     """Use the optional MCP SDK's Streamable HTTP transport without credentials.
 
-    Direct calls share one stable search session id per client by default.
-    An explicit task context overrides it without mutating the cached client.
+    Caller-owned task contexts group related searches without client state.
+    Calls without a lifecycle context omit the optional search session id.
     The blocking portal also supports callers already running an asyncio loop.
     """
 
     def __init__(self, *, timeout: float = 30.0) -> None:
         self.timeout = timeout
-        self.session_id = uuid4().hex
 
     def search(
         self, query: str, *, limit: int,
@@ -91,11 +89,10 @@ class ParallelSearchClient:
                     client_info=types.Implementation(name="AutoResearchClaw", version=__version__),
                 ) as session:
                     await session.initialize()
-                    response = await session.call_tool("web_search", {
-                        "objective": query,
-                        "search_queries": [query],
-                        "session_id": task_context.session_id if task_context is not None else self.session_id,
-                    })
+                    arguments = {"objective": query, "search_queries": [query]}
+                    if task_context is not None:
+                        arguments["session_id"] = task_context.session_id
+                    response = await session.call_tool("web_search", arguments)
 
         if response.isError:
             message = " ".join(getattr(block, "text", "") for block in response.content)
