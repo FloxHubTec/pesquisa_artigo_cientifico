@@ -14,6 +14,7 @@ license = {text = "MIT"}
 
 [project.optional-dependencies]
 anthropic = ["httpx>=0.24"]
+parallel = ["mcp>=1.10,<2"]
 web = ["scholarly>=1.7", "crawl4ai>=0.2", "tavily-python>=0.3"]
 pdf = ["PyMuPDF>=1.23"]
 all = [

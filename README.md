@@ -685,6 +685,8 @@ experiment:
 # === Web Search (Optional) ===
 web_search:
   enabled: true                      # Enable web-augmented literature search
+  provider: "auto"                   # auto (Tavily/DDG), parallel, tavily, duckduckgo
+  search_timeout_sec: 30              # Parallel MCP deadline including setup
   tavily_api_key_env: "TAVILY_API_KEY"  # Tavily API key env var (optional)
   enable_scholar: true               # Google Scholar search
   enable_pdf_extraction: true        # Extract text from PDFs
@@ -759,6 +761,22 @@ openclaw_bridge:
   use_web_fetch: false             # Live web search
   use_browser: false               # Browser-based paper collection
 ```
+
+To use free web search through [Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp),
+install `pip install -e ".[parallel]"` and set `web_search.provider: parallel` in
+your local config. Search uses Fast mode without an account or API key. Stage 4
+adds result excerpts and source URLs to `web_context.md`; academic search sources
+and the existing crawling/PDF settings still apply. Anonymous access has usage
+limits. A failed Parallel search is logged and the pipeline continues with
+academic sources, without switching web providers.
+
+The default `auto` selection still uses Tavily when configured and DuckDuckGo
+otherwise. Select `tavily` or `duckduckgo` to pin either provider, or set
+`web_search.enabled: false` to disable web augmentation. Python callers can use
+`WebSearchAgent(search_provider="parallel")` or
+`WebSearchClient(provider="parallel")`. Parallel applies `max_results` and domain
+filters locally to the returned results; it does not supply Tavily's AI answer.
+`search_timeout_sec` bounds each Parallel query including MCP setup.
 
 MiniMax presets use `MINIMAX_API_KEY`, `MiniMax-M3` as the primary model,
 and `MiniMax-M2.7` in the fallback chain.

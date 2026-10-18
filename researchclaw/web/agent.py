@@ -150,6 +150,10 @@ class WebSearchAgent:
         Maximum Google Scholar results.
     max_crawl_urls:
         Maximum URLs to crawl for full content.
+    search_provider:
+        ``auto`` (Tavily/DuckDuckGo), ``parallel``, ``tavily`` or ``duckduckgo``.
+    search_timeout_sec:
+        Overall deadline for a Parallel search, including MCP setup.
     """
 
     def __init__(
@@ -162,8 +166,14 @@ class WebSearchAgent:
         max_web_results: int = 10,
         max_scholar_results: int = 10,
         max_crawl_urls: int = 5,
+        search_provider: str = "auto",
+        search_timeout_sec: float = 30.0,
     ) -> None:
-        self.web_client = WebSearchClient(api_key=tavily_api_key)
+        self.web_client = WebSearchClient(
+            api_key=tavily_api_key,
+            provider=search_provider,
+            timeout=search_timeout_sec,
+        )
         try:
             self.scholar_client = GoogleScholarClient()
         except ImportError:

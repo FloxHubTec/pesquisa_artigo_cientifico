@@ -512,6 +512,8 @@ def _execute_literature_collect(
             )
             web_agent = WebSearchAgent(
                 tavily_api_key=tavily_key,
+                search_provider=config.web_search.provider,
+                search_timeout_sec=config.web_search.search_timeout_sec,
                 enable_scholar=config.web_search.enable_scholar,
                 enable_crawling=config.web_search.enable_crawling,
                 enable_pdf=config.web_search.enable_pdf_extraction,

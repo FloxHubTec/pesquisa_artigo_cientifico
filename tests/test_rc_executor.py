@@ -2300,6 +2300,8 @@ class TestLiteratureCollectConfiguration:
         assert result.status == StageStatus.DONE
         assert captured["web_agent_kwargs"] == {
             "tavily_api_key": "tavily-env-key",
+            "search_provider": "auto",
+            "search_timeout_sec": 30.0,
             "enable_scholar": False,
             "enable_crawling": False,
             "enable_pdf": False,

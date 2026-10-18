@@ -71,6 +71,13 @@ llm:
   # fallback_models:
   #   - "mistral"
 
+web_search:
+  enabled: true
+  provider: "auto"  # auto (Tavily/DuckDuckGo), parallel, tavily, duckduckgo
+  search_timeout_sec: 30  # Parallel MCP deadline, including connection setup
+  # Install researchclaw[parallel] and select parallel for keyless web search.
+  # Set enabled: false to disable all web augmentation.
+
 literature_search:
   # Stage 4 academic search backends. Defaults preserve the current
   # OpenAlex -> Semantic Scholar -> arXiv order.
