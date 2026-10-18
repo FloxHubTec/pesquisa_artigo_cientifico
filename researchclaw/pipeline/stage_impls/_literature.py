@@ -524,8 +524,9 @@ def _execute_literature_collect(
                 max_scholar_results=config.web_search.max_scholar_results,
                 max_crawl_urls=config.web_search.max_crawl_urls,
             )
+            context_kwargs = {"task_context": task_context} if task_context is not None else {}
             web_result = web_agent.search_and_extract(
-                topic, search_queries=queries, task_context=task_context,
+                topic, search_queries=queries, **context_kwargs,
             )
 
             # Convert Google Scholar papers into candidates
