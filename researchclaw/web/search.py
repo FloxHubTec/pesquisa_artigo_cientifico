@@ -1,4 +1,4 @@
-"""Web search powered by Tavily AI Search API.
+"""Web search with Tavily, DuckDuckGo and opt-in Parallel Search MCP.
 
 Tavily is the primary search engine (installed as a dependency).
 A DuckDuckGo HTML scrape fallback exists for when no API key is set.
@@ -12,6 +12,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 import time
@@ -19,8 +20,21 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.request import Request, urlopen
 from urllib.parse import quote_plus
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SearchTaskContext:
+    """Caller-owned immutable identity for one conversation or research run.
+
+    Reuse across batches, follow-ups, retries and cancellations of the same run.
+    Create a fresh context for independent or reset research. Parallel uses this identity
+    as its MCP ``session_id``; other providers ignore it.
+    """
+
+    session_id: str = field(default_factory=lambda: uuid4().hex)
 
 
 @dataclass
@@ -32,7 +46,7 @@ class SearchResult:
     snippet: str = ""
     content: str = ""
     score: float = 0.0
-    source: str = ""  # "tavily" | "duckduckgo"
+    source: str = ""  # "tavily" | "duckduckgo" | "parallel"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -53,7 +67,7 @@ class WebSearchResponse:
     results: list[SearchResult] = field(default_factory=list)
     answer: str = ""  # Tavily can provide a direct AI answer
     elapsed_seconds: float = 0.0
-    source: str = ""  # "tavily" | "duckduckgo"
+    source: str = ""  # "tavily" | "duckduckgo" | "parallel"
 
     @property
     def has_results(self) -> bool:
@@ -76,6 +90,11 @@ class WebSearchClient:
         Tavily search depth: "basic" or "advanced".
     include_answer:
         Whether to request Tavily's AI-generated answer.
+    provider:
+        ``auto`` retains Tavily with DuckDuckGo fallback. ``parallel`` opts
+        into anonymous Search MCP; explicit providers never switch on errors.
+    timeout:
+        Overall Parallel MCP request deadline, in seconds.
     """
 
     def __init__(
@@ -85,7 +104,16 @@ class WebSearchClient:
         max_results: int = 10,
         search_depth: str = "advanced",
         include_answer: bool = True,
+        provider: str = "auto",
+        timeout: float = 30.0,
     ) -> None:
+        if provider not in {"auto", "parallel", "tavily", "duckduckgo"}:
+            raise ValueError(f"Unknown web search provider: {provider}")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("Web search timeout must be finite and positive")
+        self.provider = provider
+        self.timeout = timeout
+        self._parallel_client = None
         self.api_key = api_key or os.environ.get("TAVILY_API_KEY", "")
         self.max_results = max_results
         self.search_depth = search_depth
@@ -98,10 +126,37 @@ class WebSearchClient:
         max_results: int | None = None,
         include_domains: list[str] | None = None,
         exclude_domains: list[str] | None = None,
+        task_context: SearchTaskContext | None = None,
     ) -> WebSearchResponse:
-        """Search the web for a query."""
+        """Search the web for a query.
+
+        Pass a caller-owned context for related calls in one research run.
+        Without a context, Parallel omits the optional session identity.
+        """
         limit = max_results or self.max_results
         t0 = time.monotonic()
+
+        if self.provider == "parallel":
+            from researchclaw.web.parallel import ParallelSearchClient
+
+            if self._parallel_client is None:
+                self._parallel_client = ParallelSearchClient(timeout=self.timeout)
+            results = self._parallel_client.search(
+                query, limit=limit,
+                include_domains=include_domains, exclude_domains=exclude_domains,
+                task_context=task_context,
+            )
+            return WebSearchResponse(
+                query=query, results=results, source="parallel",
+                elapsed_seconds=time.monotonic() - t0,
+            )
+
+        if self.provider == "tavily":
+            if not self.api_key:
+                raise ValueError("Tavily search requires a Tavily API key")
+            return self._search_tavily(query, limit, include_domains, exclude_domains, t0)
+        if self.provider == "duckduckgo":
+            return self._search_duckduckgo(query, limit, t0)
 
         # Tavily is the primary engine
         if self.api_key:
@@ -118,15 +173,20 @@ class WebSearchClient:
         *,
         max_results: int | None = None,
         inter_query_delay: float = 1.0,
+        task_context: SearchTaskContext | None = None,
     ) -> list[WebSearchResponse]:
-        """Run multiple search queries with cross-query deduplication."""
+        """Run multiple queries with deduplication and a shared task context.
+
+        Without a caller-owned context, Parallel omits the optional session identity.
+        """
         responses = []
         seen_urls: set[str] = set()
 
         for i, query in enumerate(queries):
             if i > 0:
                 time.sleep(inter_query_delay)
-            resp = self.search(query, max_results=max_results)
+            context_kwargs = {"task_context": task_context} if task_context is not None else {}
+            resp = self.search(query, max_results=max_results, **context_kwargs)
             unique_results = [r for r in resp.results if r.url not in seen_urls]
             seen_urls.update(r.url for r in unique_results)
             resp.results = unique_results

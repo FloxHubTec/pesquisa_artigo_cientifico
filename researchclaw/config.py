@@ -656,6 +656,8 @@ class WebSearchConfig:
     max_web_results: int = 10
     max_scholar_results: int = 10
     max_crawl_urls: int = 5
+    provider: str = "auto"  # auto (Tavily/DDG), parallel, tavily, duckduckgo
+    search_timeout_sec: float = 30.0
 
 
 @dataclass(frozen=True)
@@ -1016,6 +1018,8 @@ class RCConfig:
                 ),
             ),
             web_search=WebSearchConfig(
+                provider=str(web_search.get("provider", "auto")),
+                search_timeout_sec=float(web_search.get("search_timeout_sec", 30.0)),
                 enabled=bool(web_search.get("enabled", True)),
                 tavily_api_key=str(web_search.get("tavily_api_key", "")),
                 tavily_api_key_env=str(

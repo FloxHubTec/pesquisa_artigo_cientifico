@@ -26,7 +26,7 @@ from typing import Any
 from researchclaw.web.crawler import CrawlResult, WebCrawler
 from researchclaw.web.pdf_extractor import PDFContent, PDFExtractor
 from researchclaw.web.scholar import GoogleScholarClient, ScholarPaper
-from researchclaw.web.search import SearchResult, WebSearchClient, WebSearchResponse
+from researchclaw.web.search import SearchResult, SearchTaskContext, WebSearchClient, WebSearchResponse
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +150,10 @@ class WebSearchAgent:
         Maximum Google Scholar results.
     max_crawl_urls:
         Maximum URLs to crawl for full content.
+    search_provider:
+        ``auto`` (Tavily/DuckDuckGo), ``parallel``, ``tavily`` or ``duckduckgo``.
+    search_timeout_sec:
+        Overall deadline for a Parallel search, including MCP setup.
     """
 
     def __init__(
@@ -162,8 +166,14 @@ class WebSearchAgent:
         max_web_results: int = 10,
         max_scholar_results: int = 10,
         max_crawl_urls: int = 5,
+        search_provider: str = "auto",
+        search_timeout_sec: float = 30.0,
     ) -> None:
-        self.web_client = WebSearchClient(api_key=tavily_api_key)
+        self.web_client = WebSearchClient(
+            api_key=tavily_api_key,
+            provider=search_provider,
+            timeout=search_timeout_sec,
+        )
         try:
             self.scholar_client = GoogleScholarClient()
         except ImportError:
@@ -184,6 +194,7 @@ class WebSearchAgent:
         search_queries: list[str] | None = None,
         crawl_urls: list[str] | None = None,
         pdf_urls: list[str] | None = None,
+        task_context: SearchTaskContext | None = None,
     ) -> WebSearchAgentResult:
         """Run the full search + extraction pipeline.
 
@@ -197,6 +208,10 @@ class WebSearchAgent:
             Specific URLs to crawl. If None, crawls top search result URLs.
         pdf_urls:
             Specific PDF URLs to extract. If None, extracts PDFs from search.
+        task_context:
+            Caller-owned identity for one conversation/research run. Reuse for
+            follow-ups and retries, including after cancellation. If omitted,
+            this invocation starts independent research with a fresh context.
         """
         t0 = time.monotonic()
         result = WebSearchAgentResult(topic=topic)
@@ -205,8 +220,11 @@ class WebSearchAgent:
         if search_queries is None:
             search_queries = self._generate_queries(topic)
 
-        # 2. Web search (Tavily / DuckDuckGo)
-        self._run_web_search(result, search_queries)
+        # Keep identity local; never reset or overwrite a reusable client.
+        if task_context is None:
+            task_context = SearchTaskContext()
+        # 2. Web search (Tavily / DuckDuckGo / Parallel)
+        self._run_web_search(result, search_queries, task_context=task_context)
 
         # 3. Google Scholar search
         if self.enable_scholar and self.scholar_client and self.scholar_client.available:
@@ -240,12 +258,13 @@ class WebSearchAgent:
     # ------------------------------------------------------------------
 
     def _run_web_search(
-        self, result: WebSearchAgentResult, queries: list[str]
+        self, result: WebSearchAgentResult, queries: list[str],
+        *, task_context: SearchTaskContext | None = None,
     ) -> None:
         """Run web search across all queries."""
         try:
             responses = self.web_client.search_multi(
-                queries, max_results=self.max_web_results
+                queries, max_results=self.max_web_results, task_context=task_context,
             )
             for resp in responses:
                 result.web_results.extend(resp.results)
