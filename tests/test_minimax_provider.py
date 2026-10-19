@@ -42,14 +42,14 @@ class _DummyHTTPResponse:
 def _make_minimax_client(
     *,
     api_key: str = "test-minimax-key",
-    primary_model: str = "MiniMax-M3",
+    primary_model: str = "MiniMax-M3.1-Flash",
     fallback_models: list[str] | None = None,
 ) -> LLMClient:
     config = LLMConfig(
         base_url="https://api.minimaxi.com/v1",
         api_key=api_key,
         primary_model=primary_model,
-        fallback_models=fallback_models or ["MiniMax-M2.7"],
+        fallback_models=["MiniMax-M3"] if fallback_models is None else fallback_models,
     )
     return LLMClient(config)
 
@@ -305,8 +305,8 @@ class TestMiniMaxModelChain:
     def test_model_chain_default(self):
         client = _make_minimax_client()
         assert client._model_chain == [
+            "MiniMax-M3.1-Flash",
             "MiniMax-M3",
-            "MiniMax-M2.7",
         ]
 
     def test_model_chain_custom_fallbacks(self):
@@ -433,8 +433,8 @@ class TestMiniMaxCLI:
             "minimax-anthropic-cn",
         ):
             primary, fallbacks = _PROVIDER_MODELS[provider]
-            assert primary == "MiniMax-M3"
-            assert fallbacks == ["MiniMax-M2.7"]
+            assert primary == "MiniMax-M3.1-Flash"
+            assert fallbacks == ["MiniMax-M3"]
 
     @pytest.mark.parametrize(
         ("choice", "provider", "base_url"),
@@ -476,8 +476,9 @@ class TestMiniMaxCLI:
         assert f'provider: "{provider}"' in config
         assert f'base_url: "{base_url}"' in config
         assert 'api_key_env: "MINIMAX_API_KEY"' in config
-        assert 'primary_model: "MiniMax-M3"' in config
-        assert '    - "MiniMax-M2.7"' in config
+        assert 'primary_model: "MiniMax-M3.1-Flash"' in config
+        assert '    - "MiniMax-M3"' in config
+        assert 'MiniMax-M2.7' not in config
 
 
 # ---------------------------------------------------------------------------
@@ -528,14 +529,14 @@ class TestMiniMaxChatFallback:
             json_mode: bool,
         ) -> LLMResponse:
             calls.append(model)
-            if model == "MiniMax-M3":
+            if model == "MiniMax-M3.1-Flash":
                 raise RuntimeError("rate limited")
             return LLMResponse(content="ok", model=model)
 
         monkeypatch.setattr(LLMClient, "_call_with_retry", fake_call_with_retry)
         resp = client.chat([{"role": "user", "content": "test"}])
-        assert calls == ["MiniMax-M3", "MiniMax-M2.7"]
-        assert resp.model == "MiniMax-M2.7"
+        assert calls == ["MiniMax-M3.1-Flash", "MiniMax-M3"]
+        assert resp.model == "MiniMax-M3"
 
 
 # ---------------------------------------------------------------------------
@@ -555,8 +556,8 @@ class TestMiniMaxLiveAPI:
             LLMConfig(
                 base_url="https://api.minimaxi.com/v1",
                 api_key=os.environ["MINIMAX_API_KEY"],
-                primary_model="MiniMax-M3",
-                fallback_models=["MiniMax-M2.7"],
+                primary_model="MiniMax-M3.1-Flash",
+                fallback_models=["MiniMax-M3"],
                 max_tokens=64,
                 timeout_sec=60,
             )

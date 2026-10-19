@@ -760,8 +760,11 @@ openclaw_bridge:
   use_browser: false               # Browser-based paper collection
 ```
 
-MiniMax presets use `MINIMAX_API_KEY`, `MiniMax-M3` as the primary model,
-and `MiniMax-M2.7` in the fallback chain.
+MiniMax presets use `MINIMAX_API_KEY`, `MiniMax-M3.1-Flash` as the primary model,
+and `MiniMax-M3` in the fallback chain. Explicitly configured models and fallback
+chains remain unchanged. Requests omit thinking and effort controls, preserving
+API defaults: Flash uses adaptive thinking; M3 uses adaptive thinking on the
+OpenAI-compatible protocol and disabled thinking on the Anthropic-compatible protocol.
 
 | Provider preset | Region | Protocol | Base URL |
 |---|---|---|---|
