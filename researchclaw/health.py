@@ -19,6 +19,7 @@ from typing import ContextManager, cast
 import yaml
 
 from researchclaw.config import RCConfig, validate_config
+from researchclaw.llm.client import _DEFAULT_USER_AGENT, resolve_extra_headers
 
 logger = logging.getLogger(__name__)
 
@@ -301,7 +302,26 @@ def _check_anthropic_models(
     return available, missing
 
 
-def check_llm_connectivity(base_url: str, api_key: str = "") -> CheckResult:
+def _probe_headers(
+    api_key: str = "", extra_headers: dict[str, str] | None = None
+) -> dict[str, str]:
+    """Headers for doctor probes.
+
+    Uses the same user agent as the LLM client (some gateways reject generic
+    library agents) plus the configured gateway routing headers, so a probe
+    exercises the same path a real request does.
+    """
+    headers: dict[str, str] = {"User-Agent": _DEFAULT_USER_AGENT}
+    if api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key}"
+    for key, value in (extra_headers or {}).items():
+        headers[str(key)] = str(value)
+    return headers
+
+
+def check_llm_connectivity(
+    base_url: str, api_key: str = "", extra_headers: dict[str, str] | None = None
+) -> CheckResult:
     if not base_url.strip():
         return CheckResult(
             name="llm_connectivity",
@@ -314,9 +334,7 @@ def check_llm_connectivity(base_url: str, api_key: str = "") -> CheckResult:
         return _check_anthropic_connectivity(base_url, api_key)
 
     url = _models_url(base_url)
-    headers: dict[str, str] = {}
-    if api_key.strip():
-        headers["Authorization"] = f"Bearer {api_key}"
+    headers: dict[str, str] = _probe_headers(api_key, extra_headers)
     # Use GET instead of HEAD because some OpenAI-compatible gateways
     # reject HEAD probes on `/models` even though normal GET/model calls work.
     req = urllib.request.Request(url, headers=headers)
@@ -390,11 +408,14 @@ def check_llm_connectivity(base_url: str, api_key: str = "") -> CheckResult:
         )
 
 
-def _fetch_models(base_url: str, api_key: str = "") -> tuple[int, dict[str, object]]:
-    headers: dict[str, str] = {}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    request = urllib.request.Request(_models_url(base_url), headers=headers)
+def _fetch_models(
+    base_url: str,
+    api_key: str = "",
+    extra_headers: dict[str, str] | None = None,
+) -> tuple[int, dict[str, object]]:
+    request = urllib.request.Request(
+        _models_url(base_url), headers=_probe_headers(api_key, extra_headers)
+    )
     with _urlopen(request, timeout=5) as response:
         raw_bytes = _read_response_bytes(response)
         payload_map = _load_json_mapping(raw_bytes.decode("utf-8") or "{}")
@@ -432,7 +453,11 @@ def _load_json_mapping(content: str) -> Mapping[object, object]:
     return cast(Mapping[object, object], payload_obj)
 
 
-def check_api_key_valid(base_url: str, api_key: str) -> CheckResult:
+def check_api_key_valid(
+    base_url: str,
+    api_key: str,
+    extra_headers: dict[str, str] | None = None,
+) -> CheckResult:
     if not api_key.strip():
         return CheckResult(
             name="api_key_valid",
@@ -445,7 +470,7 @@ def check_api_key_valid(base_url: str, api_key: str) -> CheckResult:
         return _check_anthropic_api_key(base_url, api_key)
 
     try:
-        status, _ = _fetch_models(base_url, api_key)
+        status, _ = _fetch_models(base_url, api_key, extra_headers)
         if status == 200:
             return CheckResult(
                 name="api_key_valid",
@@ -519,6 +544,7 @@ def check_model_chain(
     api_key: str,
     primary_model: str,
     fallback_models: tuple[str, ...] | list[str] = (),
+    extra_headers: dict[str, str] | None = None,
 ) -> CheckResult:
     """Check the full model fallback chain — pass if ANY model works."""
     all_models = [m for m in [primary_model] + list(fallback_models) if m.strip()]
@@ -530,7 +556,9 @@ def check_model_chain(
             fix="Set llm.primary_model in config",
         )
 
-    results = _check_models_against_endpoint(base_url, api_key, all_models)
+    results = _check_models_against_endpoint(
+        base_url, api_key, all_models, extra_headers
+    )
     if results is None:
         return CheckResult(
             name="model_chain",
@@ -567,7 +595,10 @@ def check_model_chain(
 
 
 def _check_models_against_endpoint(
-    base_url: str, api_key: str, models: list[str]
+    base_url: str,
+    api_key: str,
+    models: list[str],
+    extra_headers: dict[str, str] | None = None,
 ) -> tuple[set[str], set[str]] | None:
     """Return (available, missing) sets, or None if endpoint unreachable."""
     if not models or not all(m.strip() for m in models):
@@ -579,7 +610,7 @@ def _check_models_against_endpoint(
         return _check_anthropic_models(base_url, api_key, models)
 
     try:
-        _, payload = _fetch_models(base_url, api_key)
+        _, payload = _fetch_models(base_url, api_key, extra_headers)
     except (
         urllib.error.HTTPError,
         urllib.error.URLError,
@@ -724,6 +755,7 @@ def run_doctor(config_path: str | Path) -> DoctorReport:
     experiment_mode = ""
     provider = ""
     acp_agent_command = "claude"
+    extra_headers: dict[str, str] = {}
 
     try:
         config = RCConfig.load(path, check_paths=False)
@@ -735,15 +767,25 @@ def run_doctor(config_path: str | Path) -> DoctorReport:
         sandbox_python_path = config.experiment.sandbox.python_path
         experiment_mode = config.experiment.mode
         acp_agent_command = config.llm.acp.agent
+        # Gateway routing headers. Some gateways need a per-conversation
+        # session id and reject a placeholder, so resolve "auto" exactly the
+        # way LLMClient does.
+        extra_headers = resolve_extra_headers(
+            getattr(config.llm, "extra_headers", {}) or {}
+        )
     except (FileNotFoundError, OSError, ValueError, yaml.YAMLError) as exc:
         logger.debug("Could not fully load config for doctor checks: %s", exc)
 
     if provider == "acp":
         checks.append(check_acp_agent(acp_agent_command))
     else:
-        checks.append(check_llm_connectivity(base_url, api_key))
-        checks.append(check_api_key_valid(base_url, api_key))
-        checks.append(check_model_chain(base_url, api_key, model, fallback_models))
+        checks.append(check_llm_connectivity(base_url, api_key, extra_headers))
+        checks.append(check_api_key_valid(base_url, api_key, extra_headers))
+        checks.append(
+            check_model_chain(
+                base_url, api_key, model, fallback_models, extra_headers
+            )
+        )
     checks.append(check_sandbox_python(sandbox_python_path))
     checks.append(check_matplotlib())
     checks.append(check_experiment_mode(experiment_mode))

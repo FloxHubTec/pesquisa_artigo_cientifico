@@ -44,6 +44,11 @@ llm:
   fallback_models:
     - "gpt-4.1"
     - "gpt-4o-mini"
+  # Extra request headers for every LLM call. Some gateways require routing
+  # metadata; the literal value "auto" is replaced with a random per-client
+  # session id.
+  # extra_headers:
+  #   x-opencode-session: "auto"
   # --- MiniMax provider example (global OpenAI-compatible endpoint) ---
   # provider: "minimax-global"
   # base_url: "https://api.minimax.io/v1"

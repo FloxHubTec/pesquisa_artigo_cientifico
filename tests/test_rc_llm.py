@@ -16,6 +16,7 @@ from researchclaw.llm.client import (
     _MAX_BACKOFF_SEC,
     _NEW_PARAM_MODELS,
     _NO_TEMPERATURE_MODELS,
+    resolve_extra_headers,
 )
 
 
@@ -228,6 +229,48 @@ def test_from_rc_config_builds_expected_llm_config():
     assert client.config.wire_api == "responses"
     assert client.config.primary_model == "o3"
     assert client.config.fallback_models == ["o3-mini", "gpt-4o"]
+
+
+def test_resolve_extra_headers_keeps_static_values() -> None:
+    headers = resolve_extra_headers({"x-tenant": "acme", "x-flag": 7})
+    assert headers == {"x-tenant": "acme", "x-flag": "7"}
+
+
+def test_resolve_extra_headers_replaces_auto_with_unique_session_id() -> None:
+    first = resolve_extra_headers({"x-opencode-session": "auto"})
+    second = resolve_extra_headers({"x-opencode-session": "auto"})
+    session = first["x-opencode-session"]
+    assert session.startswith("researchclaw-")
+    assert len(session) > len("researchclaw-")
+    assert session != second["x-opencode-session"]
+
+
+def test_resolve_extra_headers_accepts_only_mappings() -> None:
+    assert resolve_extra_headers(None) == {}
+    assert resolve_extra_headers(["x-opencode-session"]) == {}
+    assert resolve_extra_headers({}) == {}
+
+
+def test_from_rc_config_forwards_extra_headers() -> None:
+    rc_config = SimpleNamespace(
+        llm=SimpleNamespace(
+            base_url="https://gateway.example/v1",
+            api_key="inline-key",
+            api_key_env="OPENAI_API_KEY",
+            wire_api="chat_completions",
+            primary_model="deepseek-v4.1-flash",
+            fallback_models=(),
+            extra_headers={
+                "x-opencode-session": "auto",
+                "x-tenant": "acme",
+            },
+        )
+    )
+    client = LLMClient.from_rc_config(rc_config)
+    assert client.config.extra_headers["x-tenant"] == "acme"
+    assert client.config.extra_headers["x-opencode-session"].startswith(
+        "researchclaw-"
+    )
 
 
 def test_responses_wire_api_uses_responses_endpoint(monkeypatch: pytest.MonkeyPatch):
