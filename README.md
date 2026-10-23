@@ -316,7 +316,7 @@ Phase D: Experiment Design         Phase H: Finalization
 |-------|-------------|
 | **A: Scoping** | LLM decomposes the topic into a structured problem tree with research questions |
 | **A+: Hardware** | Auto-detects GPU (NVIDIA CUDA / Apple MPS / CPU-only), warns if local hardware is limited, adapts code generation accordingly |
-| **B: Literature** | Multi-source search (OpenAlex → Semantic Scholar → arXiv) for real papers, screens by relevance, extracts knowledge cards |
+| **B: Literature** | Multi-source search (OpenAlex → Semantic Scholar → arXiv, plus optional OpenReview / Crossref / PubMed / CORE) for real papers, screens by relevance, extracts knowledge cards |
 | **C: Synthesis** | Clusters findings, identifies research gaps, generates testable hypotheses via multi-agent debate |
 | **D: Design** | Designs experiment plan, generates hardware-aware runnable Python (GPU tier → package selection), estimates resource needs |
 | **E: Execution** | Runs experiments in sandbox, detects NaN/Inf and runtime bugs, self-heals code via targeted LLM repair |
@@ -332,7 +332,7 @@ Phase D: Experiment Design         Phase H: Finalization
 
 | Feature | Description |
 |---------|------------|
-| **📚 Multi-Source Literature** | Real papers from OpenAlex, Semantic Scholar & arXiv — query expansion, deduplication, circuit breaker with graceful degradation |
+| **📚 Multi-Source Literature** | Real papers from OpenAlex, Semantic Scholar & arXiv — plus opt-in OpenReview, Crossref, PubMed and CORE (the only one returning open-access PDF links). Query expansion, cross-source deduplication, retry with `Retry-After`, circuit breaker with graceful degradation |
 | **🔍 4-Layer Citation Verification** | arXiv ID check → CrossRef/DataCite DOI → Semantic Scholar title match → LLM relevance scoring. Hallucinated refs auto-removed. |
 | **🖥️ Hardware-Aware Execution** | Auto-detects GPU (NVIDIA CUDA / Apple MPS / CPU-only) and adapts code generation, imports, and experiment scale accordingly |
 | **🦾 OpenCode Beast Mode** | Complex experiments auto-routed to [OpenCode](https://github.com/anomalyco/opencode) — generates multi-file projects with custom architectures, training loops, and ablation studies. Install via `researchclaw setup`. |
@@ -622,6 +622,11 @@ literature_search:
   openalex_api_key: ""              # Optional; env var is preferred
   s2_api_key_env: "S2_API_KEY"
   s2_api_key: ""                    # Optional; falls back to llm.s2_api_key
+  pubmed_api_key_env: "PUBMED_API_KEY"
+  pubmed_api_key: ""                # Optional; NCBI key → 10 req/s instead of 3
+  core_api_key_env: "CORE_API_KEY"
+  core_api_key: ""                  # Required by the "core" source; adds pdf_url
+  pubmed_domain_gate: false         # true → skip PubMed unless research.domains is biomedical
 
 # === Experiment ===
 experiment:

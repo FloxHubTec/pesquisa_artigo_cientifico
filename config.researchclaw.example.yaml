@@ -72,8 +72,15 @@ llm:
   #   - "mistral"
 
 literature_search:
-  # Stage 4 academic search backends. Defaults preserve the current
-  # OpenAlex -> Semantic Scholar -> arXiv order.
+  # Stage 4 academic search backends, tried in this order. All of them are
+  # free; only "core" strictly needs an API key.
+  #   openalex         — metadata + citation counts, polite pool via email
+  #   semantic_scholar — citation counts, strongest ML coverage
+  #   arxiv            — preprints
+  #   openreview       — conference submissions (ICLR/NeurIPS ...) with PDFs
+  #   crossref         — publisher metadata (ACM/IEEE/Springer/Elsevier) + DOI
+  #   pubmed           — MEDLINE; biomedical only, see pubmed_domain_gate
+  #   core             — open-access full text, the only source setting pdf_url
   sources:
     - "openalex"
     - "semantic_scholar"
@@ -85,6 +92,16 @@ literature_search:
   openalex_api_key: ""
   s2_api_key_env: "S2_API_KEY"
   s2_api_key: ""
+  # Optional: NCBI E-utilities raise PubMed from 3 to 10 requests/second.
+  pubmed_api_key_env: "NCBI_API_KEY"
+  pubmed_api_key: ""
+  # Required for the "core" source; free key at https://core.ac.uk/services/api
+  core_api_key_env: "CORE_API_KEY"
+  core_api_key: ""
+  # PubMed translates queries word by word, so on a non-biomedical topic it
+  # returns mostly unrelated clinical hits. When true, the source is skipped
+  # unless research.domains contains a biomedical domain.
+  pubmed_domain_gate: false
 
 security:
   hitl_required_stages: [5, 9, 20]

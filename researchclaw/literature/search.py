@@ -25,14 +25,19 @@ import urllib.error
 from typing import cast
 
 from researchclaw.literature.arxiv_client import search_arxiv
+from researchclaw.literature.core_client import search_core
+from researchclaw.literature.crossref_client import search_crossref
 from researchclaw.literature.models import Author, Paper
 from researchclaw.literature.openalex_client import search_openalex
+from researchclaw.literature.openreview_client import search_openreview
+from researchclaw.literature.pubmed_client import search_pubmed
 from researchclaw.literature.semantic_scholar import search_semantic_scholar
 
 logger = logging.getLogger(__name__)
 
 # OpenAlex first (10K/day), then S2 (1K/5min), then arXiv (1/3s) — least
-# pressure on the most restrictive API.
+# pressure on the most restrictive API.  OpenReview / Crossref / PubMed / CORE
+# are additive sources appended by the caller when the domain needs them.
 _DEFAULT_SOURCES = ("openalex", "semantic_scholar", "arxiv")
 
 
@@ -93,6 +98,7 @@ def _dicts_to_papers(dicts: list[dict[str, object]]) -> list[Paper]:
                     doi=str(d.get("doi", "")),
                     arxiv_id=str(d.get("arxiv_id", "")),
                     url=str(d.get("url", "")),
+                    pdf_url=str(d.get("pdf_url", "")),
                     source=str(d.get("source", "")),
                 )
             )
@@ -111,6 +117,8 @@ def search_papers(
     s2_api_key: str = "",
     openalex_email: str = "",
     openalex_api_key: str = "",
+    pubmed_api_key: str = "",
+    core_api_key: str = "",
 ) -> list[Paper]:
     """Search multiple academic sources and return deduplicated results.
 
@@ -196,6 +204,48 @@ def search_papers(
                 source_stats["arxiv"] = len(papers)
                 logger.info("arXiv returned %d papers for %r", len(papers), query)
 
+            elif src_lower == "openreview":
+                papers = search_openreview(query, limit=limit, year_min=year_min)
+                all_papers.extend(papers)
+                cache_put(query, "openreview", limit, _papers_to_dicts(papers))
+                source_stats["openreview"] = len(papers)
+                logger.info("OpenReview returned %d papers for %r", len(papers), query)
+                time.sleep(1.0)
+
+            elif src_lower == "crossref":
+                papers = search_crossref(
+                    query, limit=limit, year_min=year_min, email=openalex_email
+                )
+                all_papers.extend(papers)
+                cache_put(query, "crossref", limit, _papers_to_dicts(papers))
+                source_stats["crossref"] = len(papers)
+                logger.info("Crossref returned %d papers for %r", len(papers), query)
+                time.sleep(0.5)
+
+            elif src_lower == "pubmed":
+                papers = search_pubmed(
+                    query,
+                    limit=limit,
+                    year_min=year_min,
+                    api_key=pubmed_api_key,
+                    email=openalex_email,
+                )
+                all_papers.extend(papers)
+                cache_put(query, "pubmed", limit, _papers_to_dicts(papers))
+                source_stats["pubmed"] = len(papers)
+                logger.info("PubMed returned %d papers for %r", len(papers), query)
+                time.sleep(0.5)
+
+            elif src_lower == "core":
+                papers = search_core(
+                    query, limit=limit, year_min=year_min, api_key=core_api_key
+                )
+                all_papers.extend(papers)
+                cache_put(query, "core", limit, _papers_to_dicts(papers))
+                source_stats["core"] = len(papers)
+                logger.info("CORE returned %d papers for %r", len(papers), query)
+                time.sleep(0.5)
+
             else:
                 logger.warning("Unknown literature source: %s (skipped)", src)
         except (
@@ -252,6 +302,8 @@ def search_papers_multi_query(
     s2_api_key: str = "",
     openalex_email: str = "",
     openalex_api_key: str = "",
+    pubmed_api_key: str = "",
+    core_api_key: str = "",
     inter_query_delay: float = 1.5,
 ) -> list[Paper]:
     """Run multiple queries and return deduplicated union.
@@ -271,6 +323,8 @@ def search_papers_multi_query(
             s2_api_key=s2_api_key,
             openalex_email=openalex_email,
             openalex_api_key=openalex_api_key,
+            pubmed_api_key=pubmed_api_key,
+            core_api_key=core_api_key,
             deduplicate=False,  # we dedup globally below
         )
         all_papers.extend(results)
