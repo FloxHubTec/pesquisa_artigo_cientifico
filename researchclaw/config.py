@@ -242,6 +242,16 @@ class LiteratureSearchConfig:
     openalex_api_key_env: str = "OPENALEX_API_KEY"
     s2_api_key: str = ""
     s2_api_key_env: str = "S2_API_KEY"
+    # PubMed (NCBI E-utilities): optional key raises 3 req/s → 10 req/s
+    pubmed_api_key: str = ""
+    pubmed_api_key_env: str = "PUBMED_API_KEY"
+    # CORE API v3: required for the source, also supplies open-access PDF links
+    core_api_key: str = ""
+    core_api_key_env: str = "CORE_API_KEY"
+    # PubMed is gated by research.domains: on a non-biomedical topic its
+    # word-level query translation floods screening with irrelevant hits.
+    # Opt-in, so adding the source cannot change results for existing configs.
+    pubmed_domain_gate: bool = False
 
 
 @dataclass(frozen=True)
@@ -1256,6 +1266,19 @@ def _parse_literature_search_config(data: dict[str, Any]) -> LiteratureSearchCon
         s2_api_key=str(data.get("s2_api_key", "")),
         s2_api_key_env=str(
             data.get("s2_api_key_env", LiteratureSearchConfig.s2_api_key_env)
+        ),
+        pubmed_api_key=str(data.get("pubmed_api_key", "")),
+        pubmed_api_key_env=str(
+            data.get("pubmed_api_key_env", LiteratureSearchConfig.pubmed_api_key_env)
+        ),
+        core_api_key=str(data.get("core_api_key", "")),
+        core_api_key_env=str(
+            data.get("core_api_key_env", LiteratureSearchConfig.core_api_key_env)
+        ),
+        pubmed_domain_gate=bool(
+            data.get(
+                "pubmed_domain_gate", LiteratureSearchConfig.pubmed_domain_gate
+            )
         ),
     )
 

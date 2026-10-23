@@ -47,7 +47,10 @@ class Paper:
     doi: str = ""
     arxiv_id: str = ""
     url: str = ""
-    source: str = ""  # "semantic_scholar" | "arxiv"
+    pdf_url: str = ""  # open-access document URL (CORE and friends)
+    # "semantic_scholar" | "arxiv" | "openalex" | "openreview" | "crossref"
+    # | "pubmed" | "core"
+    source: str = ""
     _bibtex_override: str = field(default="", repr=False)
 
     # ------------------------------------------------------------------
@@ -170,6 +173,7 @@ class Paper:
             "doi": self.doi,
             "arxiv_id": self.arxiv_id,
             "url": self.url,
+            "pdf_url": self.pdf_url,
             "source": self.source,
             "cite_key": self.cite_key,
         }

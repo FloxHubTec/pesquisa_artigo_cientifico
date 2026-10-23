@@ -379,6 +379,42 @@ def _execute_search_strategy(
     )
 
 
+_BIOMED_DOMAIN_HINTS = (
+    "bio",
+    "med",
+    "clin",
+    "neuro",
+    "epidem",
+    "health",
+    "genom",
+    "oncolog",
+)
+
+
+def _sources_for_domains(
+    sources: tuple[str, ...], domains: tuple[str, ...], *, gate_pubmed: bool = True
+) -> tuple[str, ...]:
+    """Drop PubMed when the run targets a non-biomedical domain.
+
+    PubMed's query translation is word-level ("KV inference" expands to
+    "kv" AND (cache...) AND (infer...)), so on an ML topic it returns hundreds
+    of irrelevant clinical hits and pollutes screening.
+    """
+    if not gate_pubmed:
+        return sources
+    labels = " ".join(str(d).lower() for d in domains)
+    if any(hint in labels for hint in _BIOMED_DOMAIN_HINTS):
+        return sources
+    filtered = tuple(src for src in sources if src.lower() != "pubmed")
+    if len(filtered) != len(sources):
+        logger.info(
+            "[literature] PubMed skipped — domain(s) %s are not biomedical "
+            "(set literature_search.pubmed_domain_gate: false to force it)",
+            ", ".join(str(d) for d in domains) or "none",
+        )
+    return filtered
+
+
 def _execute_literature_collect(
     stage_dir: Path,
     run_dir: Path,
@@ -420,21 +456,36 @@ def _execute_literature_collect(
             literature_config.openalex_api_key
             or os.environ.get(literature_config.openalex_api_key_env, "")
         )
+        pubmed_api_key = (
+            literature_config.pubmed_api_key
+            or os.environ.get(literature_config.pubmed_api_key_env, "")
+        )
+        core_api_key = (
+            literature_config.core_api_key
+            or os.environ.get(literature_config.core_api_key_env, "")
+        )
+        sources = _sources_for_domains(
+            literature_config.sources,
+            tuple(str(d) for d in config.research.domains),
+            gate_pubmed=literature_config.pubmed_domain_gate,
+        )
         logger.info(
             "[literature] Searching %d queries (expanded from %d) "
             "across %s",
             len(expanded_queries),
             len(queries),
-            " -> ".join(literature_config.sources),
+            " -> ".join(sources),
         )
         papers = search_papers_multi_query(
             expanded_queries,
             limit_per_query=literature_config.max_results_per_query,
-            sources=literature_config.sources,
+            sources=sources,
             year_min=year_min,
             s2_api_key=s2_api_key,
             openalex_email=literature_config.openalex_email,
             openalex_api_key=openalex_api_key,
+            pubmed_api_key=pubmed_api_key,
+            core_api_key=core_api_key,
             inter_query_delay=literature_config.inter_query_delay_sec,
         )
         if papers:
