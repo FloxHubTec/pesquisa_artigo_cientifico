@@ -148,6 +148,51 @@ def test_check_api_key_valid() -> None:
     assert result.status == "pass"
 
 
+def test_check_api_key_sends_extra_headers() -> None:
+    captured: dict[str, str] = {}
+
+    class _CapturingResponse(_DummyHTTPResponse):
+        pass
+
+    def fake_urlopen(request: urllib.request.Request, timeout: int = 5):
+        captured.update(dict(request.header_items()))
+        return _CapturingResponse(status=200, payload={"data": []})
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        result = health.check_api_key_valid(
+            "https://api.example.com/v1",
+            "sk-test",
+            {"x-opencode-session": "researchclaw-abc123"},
+        )
+    assert result.status == "pass"
+    assert captured.get("X-opencode-session") == "researchclaw-abc123"
+    assert captured.get("Authorization") == "Bearer sk-test"
+
+
+def test_check_model_chain_sends_extra_headers() -> None:
+    captured: list[dict[str, str]] = []
+
+    def fake_urlopen(request: urllib.request.Request, timeout: int = 5):
+        captured.append(dict(request.header_items()))
+        return _DummyHTTPResponse(
+            status=200, payload={"data": [{"id": "deepseek-v4.1-flash"}]}
+        )
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        result = health.check_model_chain(
+            "https://api.example.com/v1",
+            "sk-test",
+            "deepseek-v4.1-flash",
+            (),
+            {"x-opencode-session": "researchclaw-abc123"},
+        )
+    assert result.status == "pass"
+    assert all(
+        headers.get("X-opencode-session") == "researchclaw-abc123"
+        for headers in captured
+    )
+
+
 def test_check_api_key_invalid_401() -> None:
     with patch(
         "urllib.request.urlopen",

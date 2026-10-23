@@ -17,6 +17,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -83,11 +84,30 @@ class LLMConfig:
     retry_base_delay: float = 2.0
     timeout_sec: int = 300
     user_agent: str = _DEFAULT_USER_AGENT
-    # MetaClaw bridge: extra headers for proxy requests
+    # Extra request headers for gateways that require routing metadata
+    # (e.g. OpenCode Go wants ``x-opencode-session``). Values of "auto" are
+    # replaced with a per-client random session id.
     extra_headers: dict[str, str] = field(default_factory=dict)
     # MetaClaw bridge: fallback URL if primary (proxy) is unreachable
     fallback_url: str = ""
     fallback_api_key: str = ""
+
+
+def resolve_extra_headers(raw: Any) -> dict[str, str]:
+    """Concrete request headers from ``llm.extra_headers``.
+
+    A value of ``"auto"`` becomes a per-client random id — some gateways
+    (OpenCode Go) require a stable session id header per conversation.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, value in raw.items():
+        text = str(value if value is not None else "")
+        if text.strip().lower() == "auto":
+            text = f"researchclaw-{uuid.uuid4().hex[:16]}"
+        out[str(key)] = text
+    return out
 
 
 class LLMClient:
@@ -163,6 +183,9 @@ class LLMClient:
             fallback_url=fallback_url,
             fallback_api_key=fallback_api_key,
             timeout_sec=getattr(rc_config.llm, "timeout_sec", 600),
+            extra_headers=resolve_extra_headers(
+                getattr(rc_config.llm, "extra_headers", {})
+            ),
         )
         client = cls(config)
 
@@ -225,6 +248,9 @@ class LLMClient:
             primary_model=reviewer_model,
             fallback_models=[],
             timeout_sec=getattr(llm, "timeout_sec", 600),
+            extra_headers=resolve_extra_headers(
+                getattr(llm, "extra_headers", {})
+            ),
         )
         client = cls(config)
 

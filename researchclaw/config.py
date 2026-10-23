@@ -215,6 +215,10 @@ class LlmConfig:
     reviewer_base_url: str = ""
     reviewer_api_key: str = ""
     reviewer_api_key_env: str = ""
+    # Extra request headers sent with every LLM call (e.g.
+    # ``{"x-opencode-session": "auto"}`` for gateways that require routing
+    # metadata). Value "auto" becomes a random per-client session id.
+    extra_headers: dict[str, str] = field(default_factory=dict)
     # Multi-model debate engine. Opt-in; the debate panel reuses existing models
     # (primary_model + reviewer_model + fallback_models, deduped), each role
     # bound to a different model. The judge reuses reviewer_model.
@@ -1196,6 +1200,7 @@ def _parse_llm_config(data: dict[str, Any]) -> LlmConfig:
         reviewer_base_url=data.get("reviewer_base_url", ""),
         reviewer_api_key=data.get("reviewer_api_key", ""),
         reviewer_api_key_env=data.get("reviewer_api_key_env", ""),
+        extra_headers=dict(data.get("extra_headers") or {}),
         debate_enabled=bool(data.get("debate_enabled", False)),
         debate_rounds=_safe_int(data.get("debate_rounds"), 1),
         tournament_enabled=bool(data.get("tournament_enabled", False)),
