@@ -32,7 +32,10 @@ from researchclaw.literature.models import Author, Paper
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
-_FIELDS = "paperId,title,abstract,year,venue,citationCount,authors,externalIds,url"
+_FIELDS = (
+    "paperId,title,abstract,year,venue,citationCount,authors,externalIds,url,"
+    "openAccessPdf"
+)
 _MAX_PER_REQUEST = 100
 _RATE_LIMIT_SEC = 1.5  # conservative spacing between requests
 _MAX_RETRIES = 3
@@ -402,6 +405,9 @@ def _parse_s2_paper(item: dict[str, Any]) -> Paper:
         for a in authors_raw
         if isinstance(a, dict)
     )
+    # openAccessPdf is {"url": ..., "status": ...}; only ``url`` matters here.
+    oa_pdf = item.get("openAccessPdf") or {}
+    pdf_url = str(oa_pdf.get("url") or "").strip() if isinstance(oa_pdf, dict) else ""
     return Paper(
         paper_id=f"s2-{item.get('paperId', '')}",
         title=str(item.get("title", "")).strip(),
@@ -413,5 +419,6 @@ def _parse_s2_paper(item: dict[str, Any]) -> Paper:
         doi=str(ext_ids.get("DOI") or "").strip(),
         arxiv_id=str(ext_ids.get("ArXiv") or "").strip(),
         url=str(item.get("url") or "").strip(),
+        pdf_url=pdf_url,
         source="semantic_scholar",
     )

@@ -332,5 +332,6 @@ def _convert_result(result: arxiv.Result) -> Paper:
         doi=doi,
         arxiv_id=arxiv_id,
         url=url,
+        pdf_url=f"https://arxiv.org/pdf/{arxiv_id}" if arxiv_id else "",
         source="arxiv",
     )

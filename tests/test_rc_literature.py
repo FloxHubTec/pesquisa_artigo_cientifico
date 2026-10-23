@@ -737,6 +737,125 @@ class TestOpenAlex:
         assert p.source == "openalex"
         assert p.authors[0].name == "Ashish Vaswani"
 
+    def test_openalex_captures_open_access_pdf_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An OA location that is a real document becomes ``pdf_url``."""
+        from researchclaw.literature.openalex_client import search_openalex
+
+        payload = {
+            "results": [
+                {
+                    "id": "https://openalex.org/W9",
+                    "title": "Open Access Paper",
+                    "publication_year": 2021,
+                    "doi": "https://doi.org/10.1234/oa.2021.1",
+                    "open_access": {
+                        "is_oa": True,
+                        "oa_status": "green",
+                        "oa_url": "https://arxiv.org/pdf/2101.00001",
+                    },
+                    "best_oa_location": {
+                        "pdf_url": "https://arxiv.org/pdf/2101.00001",
+                        "landing_page_url": "https://arxiv.org/abs/2101.00001",
+                    },
+                    "locations": [],
+                }
+            ]
+        }
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(payload).encode("utf-8")
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        monkeypatch.setattr(
+            "researchclaw.literature.openalex_client.urllib.request.urlopen",
+            lambda *a, **kw: mock_resp,
+        )
+
+        papers = search_openalex("anything", limit=1)
+        assert papers[0].pdf_url == "https://arxiv.org/pdf/2101.00001"
+
+    def test_openalex_bronze_landing_page_is_not_pdf(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """DOI resolvers must not be stored as ``pdf_url``.
+
+        Real payload for 10.34883/PI.2023.13.4.040: OpenAlex reports
+        ``oa_status: bronze`` and hands out ``http://dx.doi.org/...``, which
+        serves an HTML article page, not a document.
+        """
+        from researchclaw.literature.openalex_client import search_openalex
+
+        payload = {
+            "results": [
+                {
+                    "id": "https://openalex.org/W4392703311",
+                    "title": "Analysis of the Frequency of Occurrence",
+                    "publication_year": 2023,
+                    "doi": "https://doi.org/10.34883/PI.2023.13.4.040",
+                    "open_access": {
+                        "is_oa": True,
+                        "oa_status": "bronze",
+                        "oa_url": "http://dx.doi.org/10.34883/pi.2023.13.4.040",
+                        "any_repository_has_fulltext": False,
+                    },
+                    "best_oa_location": {
+                        "pdf_url": "http://dx.doi.org/10.34883/pi.2023.13.4.040",
+                        "landing_page_url": "http://doi.org/10.34883/pi.2023.13.4.040",
+                    },
+                    "locations": [
+                        {
+                            "pdf_url": "http://dx.doi.org/10.34883/pi.2023.13.4.040",
+                            "landing_page_url": "http://doi.org/10.34883/pi.2023.13.4.040",
+                            "is_oa": True,
+                        }
+                    ],
+                }
+            ]
+        }
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(payload).encode("utf-8")
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        monkeypatch.setattr(
+            "researchclaw.literature.openalex_client.urllib.request.urlopen",
+            lambda *a, **kw: mock_resp,
+        )
+
+        papers = search_openalex("anything", limit=1)
+        assert papers[0].pdf_url == ""
+        assert papers[0].doi == "10.34883/PI.2023.13.4.040"
+
+    def test_openalex_requests_open_access_fields(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The ``select`` mask must include the OA fields, or they are dropped."""
+        import urllib.parse
+
+        from researchclaw.literature.openalex_client import search_openalex
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"results": []}).encode("utf-8")
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        captured: dict[str, str] = {}
+
+        def fake_urlopen(req: Any, *args: Any, **kwargs: Any) -> MagicMock:
+            captured["url"] = req.full_url
+            return mock_resp
+
+        monkeypatch.setattr(
+            "researchclaw.literature.openalex_client.urllib.request.urlopen",
+            fake_urlopen,
+        )
+        search_openalex("anything", limit=1)
+
+        select = urllib.parse.parse_qs(
+            urllib.parse.urlsplit(captured["url"]).query
+        )["select"][0]
+        assert "open_access" in select.split(",")
+        assert "best_oa_location" in select.split(",")
+
     def test_openalex_api_key_and_email_are_sent(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -40,6 +40,21 @@ _MAX_WAIT_SEC = 60
 _TIMEOUT_SEC = 20
 _RATE_LIMIT_SEC = 0.2  # OpenAlex is generous; 200ms is more than enough
 
+# Hosts whose "/pdf" paths serve the document itself even without a .pdf suffix
+# (arXiv: https://arxiv.org/pdf/2301.00001).
+_PDF_HOSTS = (
+    "arxiv.org",
+    "biorxiv.org",
+    "medrxiv.org",
+    "europepmc.org",
+    "ncbi.nlm.nih.gov",
+    "openreview.net",
+    "aclanthology.org",
+    "hal.science",
+    "zenodo.org",
+    "core.ac.uk",
+)
+
 
 # Last request timestamp for rate limiting
 _last_request_time: float = 0.0
@@ -97,7 +112,8 @@ def search_openalex(
         "mailto": email,
         "select": (
             "id,title,authorships,publication_year,primary_location,"
-            "cited_by_count,doi,ids,abstract_inverted_index,type"
+            "cited_by_count,doi,ids,abstract_inverted_index,type,"
+            "open_access,best_oa_location,locations"
         ),
     }
     if api_key:
@@ -234,6 +250,38 @@ def _reconstruct_abstract(inverted_index: dict[str, list[int]] | None) -> str:
     return " ".join(w for _, w in words)
 
 
+def _looks_like_pdf_url(url: str) -> bool:
+    """True when *url* points at a document rather than a landing page.
+
+    DOI resolvers (``dx.doi.org``) and publisher article pages are rejected on
+    purpose: OpenAlex labels those ``is_oa`` with ``oa_status: bronze``, but
+    following them lands on HTML, so treating them as ``pdf_url`` would hand
+    the pipeline a download that cannot succeed.
+    """
+    parts = urllib.parse.urlsplit(url)
+    path = parts.path.lower()
+    if path.endswith(".pdf"):
+        return True
+    host = parts.netloc.lower()
+    return any(host.endswith(h) for h in _PDF_HOSTS) and "/pdf" in path
+
+
+def _open_access_pdf_url(item: dict[str, Any]) -> str:
+    """First open-access location that is an actual PDF document."""
+    candidates: list[str] = []
+    for location in [item.get("best_oa_location"), *(item.get("locations") or [])]:
+        if not isinstance(location, dict):
+            continue
+        for key in ("pdf_url", "landing_page_url"):
+            value = str(location.get(key) or "").strip()
+            if value:
+                candidates.append(value)
+    for url in candidates:
+        if _looks_like_pdf_url(url):
+            return url
+    return ""
+
+
 def _parse_openalex_work(item: dict[str, Any]) -> Paper:
     """Convert a single OpenAlex work JSON to a ``Paper``."""
     # Title
@@ -298,9 +346,11 @@ def _parse_openalex_work(item: dict[str, Any]) -> Paper:
     elif openalex_id:
         url = openalex_id
 
+    # Open-access document URL (only when the location is a real document)
+    pdf_url = _open_access_pdf_url(item)
+
     # Paper ID
     paper_id = f"oalex-{openalex_id.split('/')[-1]}" if openalex_id else f"oalex-{title[:20]}"
-
     return Paper(
         paper_id=paper_id,
         title=title,
@@ -312,5 +362,6 @@ def _parse_openalex_work(item: dict[str, Any]) -> Paper:
         doi=doi,
         arxiv_id=arxiv_id,
         url=url,
+        pdf_url=pdf_url,
         source="openalex",
     )
